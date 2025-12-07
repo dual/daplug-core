@@ -35,10 +35,13 @@ commands:
     run-mypy:
         steps:
             - run: pipenv run type-check
+    sync-packaging:
+        steps:
+            - run: pipenv run setup-sync
 jobs:
     lint:
         docker:
-            - image: cimg/python:3.9.17
+            - image: cimg/python:3.10.14
         steps:
             - attach_workspace:
                   at: ~/project
@@ -46,7 +49,7 @@ jobs:
             - run-lint
     typing:
         docker:
-            - image: cimg/python:3.9.17
+            - image: cimg/python:3.10.14
         steps:
             - attach_workspace:
                   at: ~/project
@@ -54,7 +57,7 @@ jobs:
             - run-mypy
     test:
         docker:
-            - image: cimg/python:3.9.17
+            - image: cimg/python:3.10.14
         steps:
             - attach_workspace:
                   at: ~/project
@@ -63,7 +66,7 @@ jobs:
             - sonarcloud/scan
     install-build:
         docker:
-            - image: cimg/python:3.9.17
+            - image: cimg/python:3.10.14
         steps:
             - checkout:
                   method: full
@@ -76,12 +79,13 @@ jobs:
                       - ./*
     install-build-publish:
         docker:
-            - image: cimg/python:3.9.17
+            - image: cimg/python:3.10.14
         steps:
             - checkout:
                   method: full
             - python/install-packages:
                   pkg-manager: pipenv
+            - sync-packaging
             - pypi-setup
             - pypi-publish
 workflows:
