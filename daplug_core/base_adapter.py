@@ -15,13 +15,16 @@ class BaseAdapter:
         self.sns_defaults: Dict[str, Any] = kwargs.get("sns_attributes", {})
 
     def publish(self, db_data: JSONType, **kwargs: Any) -> None:
+        if kwargs.get("publish") is False:
+            return
+        payload: JSONType = kwargs["publish_data"] if "publish_data" in kwargs else db_data
         call_attributes: Dict[str, Any] = kwargs.get("sns_attributes", {})
         attributes = self.create_format_attributes(call_attributes)
         self.publisher.publish(
             endpoint=self.sns_endpoint,
             arn=self.sns_arn,
             attributes=attributes,
-            data=db_data,
+            data=payload,
             fifo_group_id=kwargs.get("fifo_group_id"),
             fifo_duplication_id=kwargs.get("fifo_duplication_id"),
         )

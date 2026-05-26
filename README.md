@@ -74,6 +74,23 @@ Because the API surface stayed the same, adapter code typically only needs impor
 
 Mix and match these pieces inside datastore-specific adapters.
 
+### 🔕 Per-call publish controls
+
+`BaseAdapter.publish` recognises two extra kwargs that adapters propagate
+through their `create`/`update`/`delete` method calls:
+
+| Kwarg | Effect |
+| ----- | ------ |
+| `publish=False` | Skip the SNS publish for this call only. Defaults are unchanged. |
+| `publish_data=<payload>` | Publish this payload to SNS instead of the data the adapter just wrote. Useful when the SNS consumers want a different shape than the row that was stored. |
+
+```python
+adapter.create(data=row, publish=False)             # write, do not notify
+adapter.update(data=row, publish_data={"id": row["id"], "event": "updated"})
+```
+
+If both are passed, `publish=False` wins.
+
 ---
 
 ## 🧭 Example: refactoring `daplug-ddb`

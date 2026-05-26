@@ -49,3 +49,37 @@ def test_create_format_attributes_excludes_none(recording_publisher):
     assert "skip" not in formatted
     assert formatted["keep"] == {"DataType": "String", "StringValue": "yes"}
     assert formatted["new"] == {"DataType": "Number", "StringValue": 1}
+
+
+def test_publish_false_skips_publisher(recording_publisher):
+    adapter = base_adapter.BaseAdapter(sns_arn="arn:aws:sns:region:123:topic")
+
+    adapter.publish(db_data={"id": 1}, publish=False)
+
+    assert recording_publisher.calls == []
+
+
+def test_publish_data_overrides_db_data(recording_publisher):
+    adapter = base_adapter.BaseAdapter(sns_arn="arn:aws:sns:region:123:topic")
+
+    adapter.publish(db_data={"id": 1}, publish_data={"event": "custom"})
+
+    assert len(recording_publisher.calls) == 1
+    assert recording_publisher.calls[0]["data"] == {"event": "custom"}
+
+
+def test_publish_false_takes_precedence_over_publish_data(recording_publisher):
+    adapter = base_adapter.BaseAdapter(sns_arn="arn:aws:sns:region:123:topic")
+
+    adapter.publish(db_data={"id": 1}, publish=False, publish_data={"event": "custom"})
+
+    assert recording_publisher.calls == []
+
+
+def test_publish_data_none_is_explicit_override(recording_publisher):
+    adapter = base_adapter.BaseAdapter(sns_arn="arn:aws:sns:region:123:topic")
+
+    adapter.publish(db_data={"id": 1}, publish_data=None)
+
+    assert len(recording_publisher.calls) == 1
+    assert recording_publisher.calls[0]["data"] is None
