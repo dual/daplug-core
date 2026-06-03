@@ -6,7 +6,7 @@ This file provides guidance to WARP (warp.dev) when working with code in this re
 
 `daplug-core` is a shared library providing schema, merge, and SNS event publishing primitives for the daplug adapter ecosystem (`daplug-ddb`, `daplug-cypher`, etc.). It consolidates previously duplicated code from adapter `common/` directories into a single Python package.
 
-**Key constraint**: This codebase intentionally avoids type hints per project requirements. Keep new code dynamic and use descriptive variable names for clarity.
+**Key constraint**: This codebase is fully type-hinted and mypy (`pipenv run type-check`) is a CI gate. Add precise annotations to new code and keep mypy clean.
 
 ## Development Commands
 
@@ -66,6 +66,10 @@ The package follows a flat module structure where each file in `daplug_core/` ha
 - **`dict_merger.py`** – Deep merge utility with configurable strategies:
   - `update_list_operation`: `add` (default, unique append), `remove`, `replace`
   - `update_dict_operation`: `upsert` (default), `remove`
+
+- **`event_registry.py`** – Module-level registry binding an SNS event name to the OpenAPI schema describing its payload (`register_event`, `get_event`, `all_events`, `clear`). Generate-only; not read on the publish hot path.
+
+- **`asyncapi_generator.py`** – Builds an AsyncAPI 3.0 spec from registered events. `build_spec` (pure), `generate` (reads registry), `write_spec` (YAML dump), `main` (CLI with `--bootstrap`/`--output`). Payloads `$ref` `#/components/schemas/<key>` from the service's `openapi.yml` via `schema_loader`.
 
 ### Testing Philosophy
 

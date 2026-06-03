@@ -21,6 +21,7 @@
 - **Batteries-included SNS publishing** – The base `publisher` encapsulates SNS fan-out, FIFO metadata, and logging so consuming packages can just hand it messages.
 - **Schema-first tooling** – `schema_loader` and `schema_mapper` read OpenAPI/JSON schemas and project payloads to the shapes your adapters expect.
 - **Deterministic merging** – `dict_merger` upgrades nested payloads with configurable list/dict strategies (add, replace, remove) so you can keep optimistic writes tight.
+- **Model-driven event catalog** – `event_registry` + `asyncapi_generator` turn the events you already publish through daplug into a generated AsyncAPI spec. Because publishing flows through daplug, the catalog is derived from your models instead of hand-written and drifting.
 
 If you are migrating `daplug-ddb` or `daplug-cypher`, remove their legacy `common/` folder and import from `daplug_core` instead. Nothing else changes.
 
@@ -71,6 +72,8 @@ Because the API surface stayed the same, adapter code typically only needs impor
 | `schema_loader.load_schema` | Loads an OpenAPI/JSON schema and resolves `$ref`s using `jsonref`. |
 | `schema_mapper.map_to_schema` | Recursively projects payloads into schema-shaped dictionaries (supports `allOf` inheritance). |
 | `dict_merger.merge` | Deep merge with per-call list/dict strategies (`add`, `remove`, `replace`, `upsert`). |
+| `event_registry.register_event` | Declares an event name and the schema (`schema_file` + `schema_key`) that describes its payload. |
+| `asyncapi_generator` | Builds an AsyncAPI 3.0 spec from the registered events, `$ref`-ing the same OpenAPI schemas your API already defines. |
 
 Mix and match these pieces inside datastore-specific adapters.
 
@@ -90,6 +93,69 @@ adapter.update(data=row, publish_data={"id": row["id"], "event": "updated"})
 ```
 
 If both are passed, `publish=False` wins.
+
+---
+
+## 📣 Event catalog generation (AsyncAPI)
+
+Services that publish through daplug shouldn't hand-maintain a separate `EVENTS.md`.
+The payload of every event is just a model snapshot, and that model is already
+described in the service's `openapi.yml` under `components/schemas`. `event_registry`
+and `asyncapi_generator` turn that into a generated, verifiable contract.
+
+> **Generate-only today.** The registry is read at build time to emit the spec.
+> It does not validate or reshape payloads on the publish hot path (a possible
+> future follow-up).
+
+### 1. Register each event next to where it is published
+
+```python
+from daplug_core import event_registry
+
+event_registry.register_event(
+    "v1-documents-document-created",   # the SNS `event` attribute
+    "api/v1/openapi.yml",              # schema_file: where the payload schema lives
+    "Document",                        # schema_key: the components/schemas key
+    "A document was created",          # optional human description
+)
+```
+
+Registration is the single source that binds an **event name** to the **model
+schema** describing its payload. The same map can later gate CI (every published
+event name must be registered) and drive publish-time validation.
+
+### 2. Generate the spec
+
+```bash
+python -m daplug_core.asyncapi_generator \
+    --title documents \
+    --version v1 \
+    --channel documents \
+    --bootstrap api.v1.persistence.events_registry \
+    --output api/v1/asyncapi.yml
+```
+
+`--bootstrap` imports the module(s) that call `register_event` so the registry is
+populated before the spec is written (repeatable). The emitted `asyncapi.yml` is
+AsyncAPI 3.0: each event becomes a message whose `payload` `$ref`s
+`#/components/schemas/<schema_key>`, pulled from your OpenAPI file via
+`schema_loader` (so REST and events share one schema definition).
+
+### 3. Verify and publish like OpenAPI
+
+Treat the generated file exactly like `openapi.yml`: regenerate it in CI and diff
+against the committed copy (fails on drift), then render it to Confluence. Because
+the spec is generated from registered events, an undocumented event can't be
+omitted and a stale payload can't survive the diff.
+
+### Programmatic use
+
+```python
+from daplug_core import asyncapi_generator
+
+spec = asyncapi_generator.generate(title="documents", version="v1", channel="documents")
+asyncapi_generator.write_spec(spec, "api/v1/asyncapi.yml")
+```
 
 ---
 

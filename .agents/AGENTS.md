@@ -14,6 +14,8 @@ This mini playbook explains how to operate on the `daplug-core` repository witho
 - `json_helper` – best-effort encode/decode helpers used by other modules
 - `schema_loader` + `schema_mapper` – OpenAPI-driven projection utilities
 - `dict_merger` – deep merge helper with configurable strategies
+- `event_registry` – declares `event name → payload schema` bindings (`register_event`, `get_event`, `all_events`, `clear`)
+- `asyncapi_generator` – builds an AsyncAPI 3.0 spec from the registry (`build_spec`, `generate`, `write_spec`, `main` CLI)
 
 Any enhancement to these utilities will ripple into the datastore-specific adapters once they import the updated package. Keep backwards compatibility in mind when editing signatures.
 
@@ -97,6 +99,23 @@ Pytest is configured in `setup.cfg` (`testpaths = tests`). No extra flags are ne
 
 `schema_loader` expects real files. Use `tmp_path` in tests to create ad-hoc schema YAML files. `schema_mapper` tests should continue to stub `schema_loader.load_schema` via `monkeypatch` and feed controlled schema dicts.
 
+### 5.4 Event Catalog (`event_registry` + `asyncapi_generator`)
+
+These two modules turn the events a service publishes through daplug into a
+generated AsyncAPI 3.0 spec (generate-only — no publish-path behavior).
+
+- `event_registry.register_event(event, schema_file, schema_key, description="")` binds
+  an SNS event name to the OpenAPI schema describing its payload. The registry is a
+  module-level dict; **call `event_registry.clear()` in `setup_function` of any test
+  that registers events** so cases stay isolated.
+- `asyncapi_generator.build_spec(...)` is pure (takes an explicit event list); `generate(...)`
+  reads the registry; `write_spec(...)` dumps YAML; `main(argv)` is the CLI
+  (`--bootstrap` imports modules that register events, then writes `--output`).
+- In tests, stub `asyncapi_generator.schema_loader.load_schema` via `monkeypatch`
+  (same pattern as `schema_mapper`) so no real schema file is needed.
+- Payloads are emitted as `$ref` to `#/components/schemas/<schema_key>`; do **not**
+  duplicate schema definitions — reuse the consuming service's `openapi.yml`.
+
 ---
 
 ## 6. Consuming Repo Integration Checklist
@@ -114,8 +133,8 @@ Document these steps in PR descriptions so future reviewers know how the base ch
 
 ## 7. Style & Tooling Notes
 
-- No type hints live in this repository (per project requirements). Keep new code dynamic.
-- Favor descriptive variable names when type context would otherwise be unclear.
+- Code is fully type-hinted and `pipenv run type-check` (mypy, configured in `setup.cfg`) is a CI gate. Add precise annotations to new modules and keep mypy clean.
+- Favor descriptive variable names alongside the type hints for clarity.
 - When logging, ensure payloads stay JSON-serializable; lean on `json_helper.try_encode_json` when in doubt.
 - Avoid direct `print`/`boto3` usage in tests—monkeypatch the modules to isolates side effects.
 
