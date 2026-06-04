@@ -21,7 +21,7 @@
 - **Batteries-included SNS publishing** – The base `publisher` encapsulates SNS fan-out, FIFO metadata, and logging so consuming packages can just hand it messages.
 - **Schema-first tooling** – `schema_loader` and `schema_mapper` read OpenAPI/JSON schemas and project payloads to the shapes your adapters expect.
 - **Deterministic merging** – `dict_merger` upgrades nested payloads with configurable list/dict strategies (add, replace, remove) so you can keep optimistic writes tight.
-- **Model-driven event catalog** – `event_registry` + `asyncapi_generator` turn the events you already publish through daplug into a generated AsyncAPI spec. Because publishing flows through daplug, the catalog is derived from your models instead of hand-written and drifting.
+- **Model-driven event catalog** – publish a self-naming Pydantic event model and `asyncapi_generator` reads those models to emit the AsyncAPI spec (exactly like OpenAPI generation reads decorated handlers). No hand-maintained catalog to drift; `required_payload_keys`/`required_headers` enforce the body + metadata contract before anything is published.
 
 If you are migrating `daplug-ddb` or `daplug-cypher`, remove their legacy `common/` folder and import from `daplug_core` instead. Nothing else changes.
 
@@ -72,8 +72,8 @@ Because the API surface stayed the same, adapter code typically only needs impor
 | `schema_loader.load_schema` | Loads an OpenAPI/JSON schema and resolves `$ref`s using `jsonref`. |
 | `schema_mapper.map_to_schema` | Recursively projects payloads into schema-shaped dictionaries (supports `allOf` inheritance). |
 | `dict_merger.merge` | Deep merge with per-call list/dict strategies (`add`, `remove`, `replace`, `upsert`). |
-| `event_registry.register_event` | Declares an event name and the schema (`schema_file` + `schema_key`) that describes its payload. |
-| `asyncapi_generator` | Builds an AsyncAPI 3.0 spec from the registered events, `$ref`-ing the same OpenAPI schemas your API already defines. |
+| `base_adapter.required_payload_keys` / `required_headers` | Transport-agnostic publish contract: the body keys and metadata headers that must be present, validated before publish (raises `PublishContractError`). |
+| `asyncapi_generator` | Globs your Pydantic event models (those with an `event_name` ClassVar) and emits an AsyncAPI 3.0 spec — `payload` from the model, `headers` from the metadata contract. No hand catalog. |
 
 Mix and match these pieces inside datastore-specific adapters.
 
@@ -98,64 +98,74 @@ If both are passed, `publish=False` wins.
 
 ## 📣 Event catalog generation (AsyncAPI)
 
-Services that publish through daplug shouldn't hand-maintain a separate `EVENTS.md`.
-The payload of every event is just a model snapshot, and that model is already
-described in the service's `openapi.yml` under `components/schemas`. `event_registry`
-and `asyncapi_generator` turn that into a generated, verifiable contract.
+This works exactly like OpenAPI generation: the developer writes normal typed
+code, and `generate-asyncapi` **reads that code** to emit `api/v1/asyncapi.yml`,
+which CI byte-diffs. There is **no hand-maintained catalog** — the event model is
+the single source of truth, the same way a Pydantic response model is for OpenAPI.
 
-> **Generate-only today.** The registry is read at build time to emit the spec.
-> It does not validate or reshape payloads on the publish hot path (a possible
-> future follow-up).
+An event is a **Pydantic model that names itself** via an `event_name` ClassVar;
+its fields are the payload schema. Publish the model and daplug reads the name +
+payload off it. The generator globs the event models, so an event cannot be
+published without appearing in the spec.
 
-### 1. Register each event next to where it is published
+### 1. Declare the event (the only thing the developer writes)
 
 ```python
-from daplug_core import event_registry
+# api/v1/events/document_events.py
+from typing import ClassVar
+from pydantic import BaseModel, Field
 
-event_registry.register_event(
-    "v1-documents-document-created",   # the SNS `event` attribute
-    "api/v1/openapi.yml",              # schema_file: where the payload schema lives
-    "Document",                        # schema_key: the components/schemas key
-    "A document was created",          # optional human description
+class DocumentCreated(BaseModel):
+    """A document was created"""            # docstring -> AsyncAPI message title
+    event_name: ClassVar[str] = "v1-documents-document-created"   # the ONLY place the name lives
+    document_id: str = Field(examples=["doc-1"])
+    user_id: str
+    status: str = "draft"
+    created: str
+    modified: str
+```
+
+### 2. Publish it — daplug reads the name + payload off the model
+
+```python
+# the adapter detects the Pydantic model, dumps it, injects event_name as the
+# 'event' header, and enforces the contract before anything reaches the transport
+self.adapter.create(data=DocumentCreated.model_validate(document.to_dict()))
+```
+
+Declare the contract once on the adapter (transport-agnostic):
+
+```python
+daplug_ddb.adapter(
+    ...,
+    required_payload_keys=["document_id", "user_id", "status", "created", "modified"],  # message body
+    required_headers=["event", "service", "version"],                                    # message metadata
 )
 ```
 
-Registration is the single source that binds an **event name** to the **model
-schema** describing its payload. The same map can later gate CI (every published
-event name must be registered) and drive publish-time validation.
+`required_payload_keys` (body) and `required_headers` (metadata) are validated
+**before publish** — a missing key raises `PublishContractError`, never a silent
+half-event. They map onto the two halves of an AsyncAPI message: `payload` and
+`headers`. Transport bindings stay operator-prefixed (`sns_arn`, future
+`kafka_brokers`/`eventbridge_bus`); the contract names stay generic.
 
-### 2. Generate the spec
+### 3. Generate the spec (mirrors `generate-openapi`)
 
 ```bash
 python -m daplug_core.asyncapi_generator \
-    --title documents \
-    --version v1 \
-    --channel documents \
-    --bootstrap api.v1.persistence.events_registry \
+    --title documents --version v1 --channel documents \
+    --events 'api/v1/events/**/*.py' \
     --output api/v1/asyncapi.yml
 ```
 
-`--bootstrap` imports the module(s) that call `register_event` so the registry is
-populated before the spec is written (repeatable). The emitted `asyncapi.yml` is
-AsyncAPI 3.0: each event becomes a message whose `payload` `$ref`s
-`#/components/schemas/<schema_key>`, pulled from your OpenAPI file via
-`schema_loader` (so REST and events share one schema definition).
+`--events` globs and imports the event modules, discovers every Pydantic model
+carrying an `event_name`, and emits AsyncAPI 3.0: `payload` from
+`model_json_schema()` (nested models inlined, no external `$ref`s) and `headers`
+from the message metadata contract. Regenerate + diff in CI exactly like
+`openapi.yml`; render to Confluence with `confluence-ops/publish-asyncapi`.
 
-### 3. Verify and publish like OpenAPI
-
-Treat the generated file exactly like `openapi.yml`: regenerate it in CI and diff
-against the committed copy (fails on drift), then render it to Confluence. Because
-the spec is generated from registered events, an undocumented event can't be
-omitted and a stale payload can't survive the diff.
-
-### Programmatic use
-
-```python
-from daplug_core import asyncapi_generator
-
-spec = asyncapi_generator.generate(title="documents", version="v1", channel="documents")
-asyncapi_generator.write_spec(spec, "api/v1/asyncapi.yml")
-```
+> The legacy `--bootstrap`/`event_registry` catalog path is retained, deprecated,
+> only so in-flight repos migrate one event at a time.
 
 ---
 

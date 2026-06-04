@@ -22,9 +22,9 @@ setup(
     packages=find_packages(include=["daplug_core", "daplug_core.*"]),
     python_requires=">=3.10",
     install_requires=[
-        "boto3>=1.42.4,<2; python_version >= '3.9'",
+        "boto3>=1.43.23,<2; python_version >= '3.10'",
         "jsonref>=1.1.0,<2; python_version >= '3.7'",
-        "simplejson>=3.20.2,<4; python_version >= '2.5' and python_version not in '3.0, 3.1, 3.2'",
+        "simplejson>=4.1.1,<5; python_version >= '2.7' and python_version not in '3.0, 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7'",
         "pyyaml>=6.0.3,<7; python_version >= '3.8'",
     ],
     keywords=[

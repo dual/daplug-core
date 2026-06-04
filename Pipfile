@@ -19,6 +19,8 @@ pylint = "*"
 pytest = "*"
 pytest-cov = "*"
 pytest-html = "*"
+pydantic = "*"
+types-pyyaml = "*"
 
 [scripts]
 lint = "pylint --fail-under 10 daplug_core"

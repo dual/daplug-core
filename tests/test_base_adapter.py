@@ -83,3 +83,83 @@ def test_publish_data_none_is_explicit_override(recording_publisher):
 
     assert len(recording_publisher.calls) == 1
     assert recording_publisher.calls[0]["data"] is None
+
+
+def test_required_payload_keys_raises_when_missing(recording_publisher):
+    adapter = base_adapter.BaseAdapter(
+        sns_arn="arn:aws:sns:region:123:topic",
+        required_payload_keys=["id", "user_id"],
+    )
+
+    with pytest.raises(base_adapter.PublishContractError) as exc:
+        adapter.publish(db_data={"id": 1})
+
+    assert exc.value.missing_payload_keys == ["user_id"]
+    assert recording_publisher.calls == []
+
+
+def test_required_headers_raises_when_missing(recording_publisher):
+    adapter = base_adapter.BaseAdapter(
+        sns_arn="arn:aws:sns:region:123:topic",
+        sns_attributes={"service": "svc", "version": "v1"},
+        required_headers=["event", "service", "version"],
+    )
+
+    with pytest.raises(base_adapter.PublishContractError) as exc:
+        adapter.publish(db_data={"id": 1})
+
+    assert exc.value.missing_headers == ["event"]
+    assert recording_publisher.calls == []
+
+
+def test_contract_passes_when_satisfied(recording_publisher):
+    adapter = base_adapter.BaseAdapter(
+        sns_arn="arn:aws:sns:region:123:topic",
+        sns_attributes={"service": "svc", "version": "v1"},
+        required_payload_keys=["id"],
+        required_headers=["event", "service", "version"],
+    )
+
+    adapter.publish(db_data={"id": 1}, sns_attributes={"event": "v1-a-b-c"})
+
+    assert len(recording_publisher.calls) == 1
+    assert recording_publisher.calls[0]["data"] == {"id": 1}
+
+
+def test_pydantic_payload_is_dumped_and_event_name_injected(recording_publisher):
+    from pydantic import BaseModel
+    from typing import ClassVar
+
+    class DocumentCreated(BaseModel):
+        event_name: ClassVar[str] = "v1-documents-document-created"
+        document_id: str
+        user_id: str
+        envelope_id: str | None = None
+
+    adapter = base_adapter.BaseAdapter(
+        sns_arn="arn:aws:sns:region:123:topic",
+        sns_attributes={"service": "svc", "version": "v1"},
+        required_payload_keys=["document_id", "user_id"],
+        required_headers=["event", "service", "version"],
+    )
+
+    adapter.publish(db_data=DocumentCreated(document_id="d1", user_id="u1"))
+
+    call = recording_publisher.calls[0]
+    # model_dump(exclude_none) drops envelope_id; event_name injected into headers
+    assert call["data"] == {"document_id": "d1", "user_id": "u1"}
+    assert call["attributes"]["event"] == {"DataType": "String", "StringValue": "v1-documents-document-created"}
+
+
+def test_explicit_event_attribute_not_overridden_by_marker(recording_publisher):
+    from pydantic import BaseModel
+    from typing import ClassVar
+
+    class Thing(BaseModel):
+        event_name: ClassVar[str] = "v1-marker-name"
+        id: str
+
+    adapter = base_adapter.BaseAdapter(sns_arn="arn:aws:sns:region:123:topic")
+    adapter.publish(db_data=Thing(id="x"), sns_attributes={"event": "v1-explicit-name"})
+
+    assert recording_publisher.calls[0]["attributes"]["event"]["StringValue"] == "v1-explicit-name"
