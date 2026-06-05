@@ -167,6 +167,26 @@ from the message metadata contract. Regenerate + diff in CI exactly like
 > The legacy `--bootstrap`/`event_registry` catalog path is retained, deprecated,
 > only so in-flight repos migrate one event at a time.
 
+### ⚠️ Models must mirror real nullability
+
+You publish through the model (`publish_data=DocumentCreated.model_validate(item)`),
+so the model is validated against the **actual** payload at runtime. If a field can
+be `None` in practice, it **must** be `X | None = None` on the model — a model that
+is *stricter* than the data raises `pydantic.ValidationError` and your endpoint
+**500s**. Rule of thumb:
+
+- A field is required on the model **only if it is always present and non-null** at
+  publish time. Anything else is `X | None = None`.
+- Cross-check each field against the entity dataclass / the `*CreateRequest` schema —
+  a field that is optional/nullable on the request is nullable on the event.
+- `payload()` dumps with `exclude_none=True`, so a null optional is simply omitted
+  from the wire (the intended policy — not a dropped key); the schema marks it
+  non-required automatically.
+
+`integration-test-local` is the gate that catches an over-strict model (it exercises
+the real publish paths with null-heavy payloads); if it 500s on `model_validate`,
+loosen the offending field to `| None`.
+
 ---
 
 ## 🧭 Example: refactoring `daplug-ddb`
